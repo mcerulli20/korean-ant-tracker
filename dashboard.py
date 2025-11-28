@@ -1,6 +1,4 @@
-Here is the code as plain text that you can copy:
 
-Python
 
 import streamlit as st
 import requests
@@ -284,3 +282,4 @@ with st.spinner(f"Scraping {PAGES_TO_SCRAPE} pages from DC Inside..."):
     # AUTO REFRESH LOOP
     time.sleep(REFRESH_SECONDS)
     st.rerun()
+
