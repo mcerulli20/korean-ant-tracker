@@ -5,204 +5,290 @@ from collections import Counter
 import re
 import pandas as pd
 import time
+import yfinance as yf
+from datetime import datetime
+import pytz
 
 # --- CONFIGURATION ---
-# 1. YOUR CUSTOM TICKER LIST (Embedded directly here)
-# Format: "TICKER": ["korean_slang", "lowercase", "other_nickname"]
-TICKER_MAP = {
+
+# 1. CONSTANTS
+PAGES_TO_SCRAPE = 50  # Fixed depth
+REFRESH_SECONDS = 300 # 5 Minutes
+
+# 2. MANUAL KOREAN MAP (Priority List)
+MANUAL_MAP = {
     # --- YOUR REQUESTED STOCKS ---
     "BMNR": ["bmnr", "비트마인", "비엠엔알", "이더리움"],
     "RGTI": ["rgti", "리게티", "양자", "퀀텀"],
     "NBIS": ["nbis", "네비우스", "얀덱스", "yandex"],
     "CRWV": ["crwv", "코어위브"],
     "OKLO": ["oklo", "오클로", "알트만", "원전"],
+    "IREN": ["iren", "아이리스", "이렌", "채굴"],
+    "SBET": ["sbet", "샤프링크", "에스벳"],
 
-    # --- LEVERAGED ETFs (The Kings of DC Inside) ---
+    # --- LEVERAGED ETFs ---
     "SOXL": ["속슬", "soxl", "필반도체", "3배", "반도체3배"],
     "SOXS": ["속스", "soxs", "숏슬", "반도체숏"],
     "TQQQ": ["티큐", "tqqq", "나스닥3배"],
     "SQQQ": ["스큐", "sqqq", "숏큐", "나스닥숏"],
-    "SCHD": ["슈드", "schd", "배당"],
-    "JEPI": ["제피", "jepi"],
+    "SCHD": ["슈드", "schd", "배당", "성장주"],
+    "JEPI": ["제피", "jepi", "월배당"],
+    "TMF":  ["티엠에프", "tmf", "채권3배"],
+    "TMV":  ["티엠브이", "tmv"],
+    "BOIL": ["보일", "boil", "가스"],
+    "KOLD": ["콜드", "kold", "가스숏"],
+    "YINN": ["인", "yinn", "중국3배"],
+    "YANG": ["양", "yang", "중국숏"],
 
     # --- BIG TECH & POPULAR ---
-    "TSLA": ["테슬라", "테슬형", "tsla", "머스크", "일론"],
-    "NVDA": ["엔비디아", "엔비", "nvda", "황회장"],
+    "TSLA": ["테슬라", "테슬형", "tsla", "머스크", "일론", "전기차", "천슬라"],
+    "NVDA": ["엔비디아", "엔비", "nvda", "황회장", "젠슨황", "가죽자켓"],
     "AAPL": ["애플", "aapl", "사과", "팀쿡"],
     "MSFT": ["마소", "msft", "마이크로소프트"],
-    "GOOGL": ["구글", "googl", "알파벳"],
-    "AMZN": ["아마존", "amzn"],
-    "IONQ": ["아이온큐", "아큐", "ionq"],
-    "PLTR": ["팔란티어", "pltr"],
+    "GOOGL": ["구글", "googl", "알파벳", "갓글"],
+    "AMZN": ["아마존", "amzn", "베조스"],
+    "META": ["메타", "meta", "페이스북", "주커버그"],
+    "NFLX": ["넷플", "nflx", "넷플릭스"],
+
+    # --- SEMICONDUCTORS & AI ---
+    "AMD":  ["암드", "amd", "리사수"],
+    "INTC": ["인텔", "intc"],
+    "AVGO": ["브로드컴", "avgo"],
+    "TSM":  ["티에스엠", "tsm", "대만"],
+    "PLTR": ["팔란티어", "pltr", "팔란"],
+    "SMCI": ["슈마컴", "smci", "슈퍼마이크로"],
+    "MU":   ["마이크론", "mu"],
+    
+    # --- MEME, CRYPTO & RETAIL FAVORITES ---
+    "IONQ": ["아이온큐", "아큐", "ionq", "김정상"],
     "COIN": ["코인베이스", "coin", "코베"],
-    "MSTR": ["마이크로스트래티지", "마스", "mstr"],
+    "MSTR": ["마이크로스트래티지", "마스", "mstr", "세일러"],
     "GME":  ["게임스탑", "gme", "겜스"],
+    "AMC":  ["에이엠씨", "amc"],
+    "RKLB": ["로켓랩", "rklb", "로켓"],
+    "ASTS": ["에스티", "asts", "스페이스모바일"],
+    "JOBY": ["조비", "joby"],
+    "LCID": ["루시드", "lcid"],
+    "RIVN": ["리비안", "rivn"],
+    "MULN": ["뮬런", "muln"],
+    "NKLA": ["니콜라", "nkla"],
+    "BYND": ["bynd", "비욘드미트", "비욘드", "콩고기"],
+    "CPNG": ["쿠팡", "cpng"],
+    "O":    ["리얼티인컴", "리얼티", "월배당", "o"],
 }
 
-# 2. English words to ignore in "Auto Discovery"
+# 3. English words to ignore (Common false positives)
 IGNORE_WORDS = {
     'ETF', 'QQQ', 'AI', 'CEO', 'FOMC', 'CPI', 'PPI', 'GDP', 'VS', 'US', 'FED', 
     'SEC', 'IPO', 'PER', 'EPS', 'YOLO', 'LONG', 'SHORT', 'HOLD', 'BUY', 'SELL',
     'POV', 'USA', 'KRW', 'USD', 'NEWS', 'DCA', 'IMF', 'IRP', 'ISA', 'OTM', 'ITM',
     'GOD', 'RIP', 'WTF', 'OMG', 'BIG', 'PUT', 'CALL', 'MAX', 'MIN', 'ONE', 'TWO',
     'WOW', 'LOL', 'NEW', 'NOW', 'HOT', 'TOP', 'BEST', 'END', 'RUN', 'FLY', 'SEE',
-    'WAY', 'YES', 'NO', 'AGAIN', 'TODAY', 'WEEK', 'MONTH', 'YEAR', 'TIME', 'LOVE'
-}
-
-# 3. Korean words to ignore in "Mystery Trend Spotter"
-KOREAN_STOPWORDS = {
-    '오늘', '지금', '진짜', '이거', '근데', '하는', '내가', '존나', '시발', 'ㅋㅋ', 'ㅎㅎ',
-    'ㅠㅠ', '매수', '매도', '사람', '생각', '미장', '국장', '주식', '어떻게', '왜', '좀',
-    '다시', '보면', '가즈아', '오늘의', '미국', '달러', '코인', '비트', '나스닥', '있는',
-    '하고', '아니', '그냥', '많이', '너무', '개미', '형들', '갈까', '말까', '언제', '역시',
-    '이제', '이렇게', '지수', '하락', '상승', '본장', '프리', '거래', '수익', '손실', '제발',
-    '나는', '오를', '내릴', '롱충', '숏충', '같다', '같은', '해서', '하면', '오르', '내리'
+    'WAY', 'YES', 'NO', 'AGAIN', 'TODAY', 'WEEK', 'MONTH', 'YEAR', 'TIME', 'LOVE',
+    # Common English Words that match Tickers
+    'ARE', 'CAN', 'CAT', 'EAT', 'BEAT', 'FUN', 'HAS', 'ALL', 'AGO', 'AWAY',
+    'BET', 'BOX', 'CAR', 'CASH', 'DAY', 'DIG', 'DOG', 'DOOR', 'DRY', 'EYE',
+    'FAT', 'FIT', 'FLY', 'FOX', 'GAS', 'GET', 'GO', 'GOLD', 'GOOD', 'GUY',
+    'HE', 'HER', 'HEY', 'HIM', 'HIS', 'HOP', 'HOT', 'ICE', 'INK', 'JOB',
+    'KEY', 'KIDS', 'LAW', 'LET', 'LOW', 'MAN', 'MAP', 'MET', 'MOM', 'NET',
+    'OIL', 'OLD', 'OUT', 'OWN', 'PAY', 'PET', 'PLAY', 'RAW', 'RED', 'RUN',
+    'SAD', 'SAFE', 'SAW', 'SAY', 'SEA', 'SEE', 'SET', 'SKY', 'SON', 'SUN',
+    'TAX', 'TEA', 'TEN', 'THE', 'TIE', 'TOO', 'TOP', 'TRY', 'TWO', 'USE',
+    'VAN', 'WAR', 'WAY', 'WE', 'WET', 'WIN', 'WOW', 'YES', 'YET', 'YOU', 'ZOO',
+    'ART', 'ANT', 'BUG', 'BUS', 'CAP', 'CUT', 'DID', 'EGO', 'ERA', 'FAR',
+    'FEW', 'FIX', 'FLU', 'FOG', 'GAP', 'GYM', 'HAT', 'HIT', 'HUG', 'HUT',
+    'ILL', 'JAR', 'JET', 'JOY', 'KIT', 'LID', 'LIP', 'LOG', 'LOT', 'MAD',
+    'MIX', 'MUD', 'MUG', 'NAP', 'NOD', 'NUT', 'OAK', 'ODD', 'OFF', 'PAN',
+    'PEN', 'PIE', 'PIG', 'PIN', 'PIT', 'POD', 'POP', 'POT', 'PRO', 'RAG',
+    'RAT', 'RIB', 'RID', 'RIG', 'RIM', 'RIP', 'ROD', 'ROT', 'RUB', 'RUG',
+    'RUM', 'RUT', 'SAP', 'SIP', 'SIT', 'SIX', 'SKI', 'SOB', 'SOD', 'SOW',
+    'SOY', 'SPA', 'SPY', 'SUB', 'SUM', 'TAB', 'TAG', 'TAN', 'TAP', 'TAR',
+    'TIP', 'TOE', 'TON', 'TOW', 'TOY', 'TUB', 'TUG', 'URN', 'VET', 'VOW',
+    'WAX', 'WEB', 'WED', 'WIG', 'WIT', 'WOE', 'WOK', 'WON', 'YAM', 'YAP',
+    'YEA', 'YEN', 'YIP', 'ZIP', 'MEME', 'LIFE', 'LIVE', 'LOVE', 'HOPE', 'NEXT',
+    'FAST', 'SAFE', 'BEST', 'REAL', 'TRUE', 'MAIN', 'POST', 'READ', 'LOOK',
+    'HEAR', 'TELL', 'TALK', 'WALK', 'OPEN', 'SHUT', 'STOP', 'WAIT', 'STAY',
+    'GROW', 'HELP', 'SEND', 'PICK', 'KEEP', 'HOLD', 'FIND', 'FALL', 'TURN',
+    'MOVE', 'MEET', 'LEAD', 'LATE', 'HARD', 'EASY', 'COOL', 'COLD', 'WARM',
+    'HIGH', 'DEEP', 'WIDE', 'LONG', 'FULL', 'FREE', 'RICH', 'POOR', 'NICE',
+    'KIND', 'FAIR', 'FINE', 'BLUE', 'CME', 'CS', 'GS', 'MS', 'C', 'A', 'F', 'ONE'
 }
 
 # --- PAGE CONFIG ---
-st.set_page_config(
-    page_title="Korean Ant Sentiment Tracker",
-    page_icon="🐜",
-    layout="wide"
-)
+st.set_page_config(page_title="Korean Ant Sentiment Tracker", page_icon="🐜", layout="wide")
+
+# --- DATA LOADING ---
+@st.cache_data(ttl=3600)
+def load_sec_tickers():
+    """Downloads SEC list and creates a {Name: Ticker} map for Auto-Discovery."""
+    url = "https://www.sec.gov/files/company_tickers.json"
+    headers = {"User-Agent": "StreamlitDashboard contact@example.com"}
+    sec_map = {} 
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            suffixes = [" Inc.", " Corp.", " Corporation", " Ltd", " Co.", " PLC", " Group", " Holdings"]
+            for entry in data.values():
+                ticker = entry['ticker'].upper()
+                raw_title = entry['title']
+                clean = raw_title
+                for s in suffixes:
+                    clean = clean.replace(s, "").replace(s.lower(), "")
+                clean = clean.strip().lower()
+                sec_map[ticker] = [ticker.lower()]
+                if len(clean) > 3:
+                    sec_map[ticker].append(clean)
+            return sec_map
+        return {}
+    except:
+        return {}
+
+# --- STOCK PRICE FUNCTION ---
+@st.cache_data(ttl=300) # Cache prices for 5 minutes
+def get_price_changes(ticker_list):
+    """Fetches daily % change for a list of tickers using yfinance."""
+    if not ticker_list: return {}
+    
+    tickers_str = " ".join(ticker_list)
+    changes = {}
+    
+    try:
+        # Download 5 days of history
+        data = yf.download(tickers_str, period="5d", progress=False)
+        
+        if 'Close' in data:
+            closes = data['Close']
+            
+            # Helper to calculate change
+            def calc_change(series):
+                if len(series) >= 2:
+                    return ((series.iloc[-1] - series.iloc[-2]) / series.iloc[-2]) * 100
+                return None # Return None if not enough data (marks as N/A)
+
+            if isinstance(closes, pd.DataFrame):
+                for ticker in ticker_list:
+                    try:
+                        changes[ticker] = calc_change(closes[ticker].dropna())
+                    except: changes[ticker] = None
+            elif isinstance(closes, pd.Series):
+                changes[ticker_list[0]] = calc_change(closes.dropna())
+                
+    except Exception as e:
+        st.error(f"Error fetching prices: {e}")
+        
+    return changes
 
 # --- SCRAPING FUNCTIONS ---
 @st.cache_data(ttl=60)
-def scrape_dc_gallery(gallery_id, pages=10, mode="all"):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-    }
+def scrape_dc_gallery(gallery_id, pages=10):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
     base_url = "https://gall.dcinside.com/mgallery/board/lists"
     all_titles = []
     
-    progress_text = st.empty()
-    progress_bar = st.progress(0)
-    
-    for page in range(1, pages + 1):
-        progress_text.text(f"🐜 Collecting Page {page}/{pages}...")
-        params = {'id': gallery_id, 'page': page}
-        if mode == "recommend":
-            params['exception_mode'] = 'recommend'
-
+    progress = st.progress(0)
+    for p in range(1, pages + 1):
+        params = {'id': gallery_id, 'page': p}
         try:
-            response = requests.get(base_url, headers=headers, params=params, timeout=5)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                rows = soup.select('.gall_list .ub-content')
-                for row in rows:
-                    title_element = row.select_one('.gall_tit a')
-                    if title_element:
-                        full_text = title_element.text.strip()
-                        # Clean title: Remove [Reply Count] like [32]
-                        clean_title = re.sub(r'\[\d+\]$', '', full_text).strip()
-                        if clean_title:
-                            all_titles.append(clean_title)
-            time.sleep(0.15) 
-        except Exception as e:
-            st.error(f"Error on page {page}: {e}")
-        
-        progress_bar.progress(page / pages)
+            r = requests.get(base_url, headers=headers, params=params, timeout=5)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, 'html.parser')
+                for row in soup.select('.gall_list .ub-content'):
+                    t = row.select_one('.gall_tit a')
+                    if t: all_titles.append(re.sub(r'\[\d+\]$', '', t.text.strip()).strip())
+            time.sleep(0.1)
+        except: pass
+        progress.progress(p/pages)
     
-    progress_text.empty()
-    progress_bar.empty()
+    progress.empty()
     return all_titles
 
-def process_sentiment(titles):
+def process_sentiment(titles, sec_map):
     ticker_counter = Counter()
-    word_counter = Counter()
     
-    # Create a set of all known keywords (tickers + slang) to exclude them from the "Unknown" list
-    all_known_keywords = set()
-    for keywords in TICKER_MAP.values():
-        for k in keywords:
-            all_known_keywords.add(k)
+    full_map = sec_map.copy()
+    for k, v in MANUAL_MAP.items():
+        if k in full_map: full_map[k] = list(set(full_map[k] + v))
+        else: full_map[k] = v
 
     for title in titles:
         title_lower = title.lower()
-        found_in_title = set()
+        found = set()
         
-        # 1. Known Ticker Check (Map)
-        for ticker, keywords in TICKER_MAP.items():
-            for keyword in keywords:
-                if keyword in title_lower:
-                    found_in_title.add(ticker)
-                    break 
+        for ticker, keywords in full_map.items():
+            for k in keywords:
+                if len(k) > 2 and k in title_lower: 
+                    found.add(ticker)
+                    break
         
-        # 2. Auto Discovery (English Uppercase Words)
-        # Regex finds 2-5 letter uppercase words (e.g. RGTI, TSLA)
-        candidates = re.findall(r'\b[A-Z]{2,5}\b', title)
-        for cand in candidates:
-            if cand not in IGNORE_WORDS and cand not in found_in_title:
-                # If we found it via auto-discovery, treat it as a hit
-                # But check if we already mapped it to a key to avoid duplicates
-                if cand in TICKER_MAP:
-                    found_in_title.add(cand)
-                else:
-                    found_in_title.add(cand)
+        for cand in re.findall(r'\b[A-Z]{2,5}\b', title):
+            if cand in full_map and cand not in IGNORE_WORDS:
+                found.add(cand)
+        
+        ticker_counter.update(found)
 
-        ticker_counter.update(found_in_title)
+    return ticker_counter, titles
 
-        # 3. Mystery Word Spotter (Korean Only)
-        # This finds high-frequency Korean words that are NOT in your ticker list yet.
-        words = title_lower.split()
-        for word in words:
-            # Remove punctuation
-            word = re.sub(r'[^\w\s]', '', word)
-            
-            # Logic: Must be Korean AND not a known ticker keyword AND not a stopword
-            if re.search(r'[가-힣]+', word): 
-                if word not in all_known_keywords and word not in KOREAN_STOPWORDS:
-                    word_counter[word] += 1
-
-    return ticker_counter, word_counter, titles
-
-# --- DASHBOARD UI ---
+# --- DASHBOARD LOGIC ---
 st.title("🐜 Korean Ant Sentiment Tracker")
-st.markdown("""
-Tracking real-time mentions on **DC Inside (Mijugal)**.  
-Includes **Auto-Discovery** for unknown tickers + **Mystery Word** spotting.
-""")
 
+# Get Current Time (EST)
+tz = pytz.timezone('US/Eastern')
+now = datetime.now(tz).strftime("%Y-%m-%d %I:%M:%S %p %Z")
+st.caption(f"Last Updated: **{now}** | Updates automatically every 5 minutes.")
+
+# --- SIDEBAR (Minimal) ---
 with st.sidebar:
-    st.header("⚙️ Scanner Settings")
-    gallery_id = st.selectbox("Target Gallery", ["tenbagger", "stockus", "nasdaq", "bitcoins"], index=0)
-    pages = st.slider("Depth (Pages)", 1, 100, 10, help="50 pages ≈ 2,500 posts.")
-    mode = st.radio("Filter Mode", ["all", "recommend"], index=0, format_func=lambda x: "🔥 New Posts (High Vol)" if x == "all" else "💎 Concept (Best Of)")
-    st.divider()
-    if st.button("🚀 START SCAN", type="primary", use_container_width=True):
-        st.session_state['run'] = True
+    st.header("Settings")
+    gallery = st.selectbox("Target Gallery", ["tenbagger", "stockus", "nasdaq", "bitcoins"], index=0)
+    st.info(f"Depth: Fixed at {PAGES_TO_SCRAPE} pages")
+    st.info("Mode: Automatic Refresh")
 
-# --- RESULTS ---
-if st.session_state.get('run'):
-    with st.spinner("Scraping DC Inside..."):
-        titles = scrape_dc_gallery(gallery_id, pages, mode)
-    
+# --- MAIN EXECUTION ---
+# No button check, just run immediately
+with st.spinner(f"Scraping {PAGES_TO_SCRAPE} pages from DC Inside..."):
+    # Load Data
+    sec_map = load_sec_tickers()
+    titles = scrape_dc_gallery(gallery, PAGES_TO_SCRAPE)
+
     if titles:
-        ticker_counts, word_counts, raw_titles = process_sentiment(titles)
+        # Process
+        t_counts, raw = process_sentiment(titles, sec_map)
         
-        # Create DataFrames
-        df_tickers = pd.DataFrame.from_dict(ticker_counts, orient='index', columns=['Mentions']).sort_values(by='Mentions', ascending=False).head(20)
-        df_words = pd.DataFrame.from_dict(word_counts, orient='index', columns=['Count']).sort_values(by='Count', ascending=False).head(20)
+        # DataFrame
+        df = pd.DataFrame.from_dict(t_counts, orient='index', columns=['Mentions']).sort_values('Mentions', ascending=False).head(20)
         
-        # Display Results
-        st.success(f"Successfully analyzed {len(titles)} posts!")
+        # Prices
+        if not df.empty:
+            top_tickers = df.index.tolist()
+            price_changes = get_price_changes(top_tickers)
+            df['% Change'] = df.index.map(price_changes)
+
+        # UI
+        st.success(f"Analyzed {len(titles)} posts.")
         
-        col1, col2 = st.columns([1.5, 1])
+        col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.subheader("🏆 Top Identified Tickers")
-            if not df_tickers.empty:
-                st.bar_chart(df_tickers, color="#FF4B4B")
-            else:
-                st.info("No known tickers found. Try increasing depth.")
-
+            st.subheader("🏆 Leaderboard")
+            st.bar_chart(df['Mentions'], color="#FF4B4B")
+            
         with col2:
-            st.subheader("❓ Mystery Trend Spotter")
-            st.caption("Top Korean words NOT in your ticker map. If you see a stock name here, add it to the code!")
-            st.dataframe(df_words, use_container_width=True)
+            st.subheader("📊 Detailed Counts")
+            if not df.empty:
+                def color_change(val):
+                    if pd.isna(val): return 'color: gray'
+                    color = '#4CAF50' if val > 0 else '#FF4B4B' if val < 0 else 'gray'
+                    return f'color: {color}'
 
-        with st.expander("🔍 Inspect Raw Post Titles"):
-            st.write(raw_titles)
-    else:
-        st.error("No data retrieved.")
+                styled_df = df.style.map(color_change, subset=['% Change']).format({'% Change': lambda x: f'{x:+.2f}%' if pd.notnull(x) else 'N/A'})
+                st.dataframe(styled_df, use_container_width=True)
+            else:
+                st.info("No tickers found.")
+
+        with st.expander("Raw Titles"):
+            st.write(raw)
+
+    # AUTO REFRESH LOOP
+    time.sleep(REFRESH_SECONDS)
+    st.rerun()
