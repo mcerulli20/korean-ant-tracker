@@ -1,3 +1,7 @@
+Here is the code as plain text that you can copy:
+
+Python
+
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -13,7 +17,7 @@ import concurrent.futures
 # --- CONFIGURATION ---
 
 # 1. CONSTANTS
-PAGES_TO_SCRAPE = 50  # Fixed depth
+PAGES_TO_SCRAPE = 50  # Fixed depth (approx 2,500 posts)
 REFRESH_SECONDS = 300 # 5 Minutes
 MAX_WORKERS = 10      # Speed boost: Scrapes 10 pages at once
 
