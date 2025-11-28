@@ -1,1 +1,5 @@
-streamlit pandas requests beautifulsoup4 yfinance
+streamlit
+pandas
+requests
+beautifulsoup4
+yfinance
